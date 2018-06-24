@@ -31,7 +31,7 @@ import java.util.Map;
  * A QMI message. Messages are sent to a ServiceCode, have a message code, and optionally.
  * TLV parameters.
  */
-class Message {
+public class Message {
     private ServiceCode mService;
     private int mMessage;
     private int mClient;

@@ -16,7 +16,7 @@
 
 package net.scintill.qmi;
 
-enum ServiceCode {
+public enum ServiceCode {
     Control(0),
     Wds(1),
     Dms(2),

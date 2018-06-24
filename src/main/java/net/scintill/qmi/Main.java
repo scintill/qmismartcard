@@ -16,7 +16,13 @@
 
 package net.scintill.qmi;
 
+import de.srlabs.simlib.ChannelHandler;
+import de.srlabs.simlib.CommonFileReader;
+import net.scintill.qmi.smartcard.QmiSmartcardProvider;
+
+import javax.smartcardio.CardException;
 import java.io.IOException;
+import java.security.Security;
 
 public class Main {
 
@@ -27,12 +33,12 @@ public class Main {
             Client client = new LinuxFileClient(path, System.err);
             client.start();
 
-            Message msg = new Message(ServiceCode.Dms, 0x24);
-            Message resp = client.send(msg);
-            System.out.println("MSISDN="+resp.getTlv(1).getValueString());
+            Security.insertProviderAt(new QmiSmartcardProvider(client), 1);
+            ChannelHandler.getInstance(0, "QmiTerminalFactory");
+            System.out.println("ICCID=" + CommonFileReader.readICCID());
 
             client.stop();
-        } catch (IOException | QmiException e) {
+        } catch (IOException | CardException e) {
             throw new RuntimeException(e);
         }
     }

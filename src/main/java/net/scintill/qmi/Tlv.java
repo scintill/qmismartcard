@@ -26,7 +26,7 @@ import java.util.Map;
  * A type-length-value container. The meanings of the types (two-byte integer)
  * and values (byte array) are not handled by this class.
  */
-class Tlv {
+public class Tlv {
     private short mType = -1;
     private byte[] mValue = null;
 

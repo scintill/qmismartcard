@@ -2,6 +2,11 @@
 
 An experiment in building a Java-compatible smartcard interface on top of QMI over CDC-WDM.
 
+# Caveats/TODO
+
+* SIM is assumed to be present
+* Other TODOs in code
+
 # Usage
 
 From `adb shell` (over wifi):

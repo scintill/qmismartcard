@@ -21,7 +21,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +43,7 @@ public class Client {
 
     private BlockingQueue<Message> mOutputQueue = new LinkedBlockingQueue<>();
     private final ConcurrentMap<Integer, MessageCallback> mCallbacks = new ConcurrentHashMap<>();
+    private final List<MessageCallback> mIndicationHandlers = new ArrayList<>();
 
     private boolean mStopInputThread = false;
     private static final Message THE_STOP_MESSAGE = new Message();
@@ -64,11 +67,20 @@ public class Client {
             try {
                 while (!mStopInputThread || mCallbacks.size() != 0) {
                     Message msg = Message.readFromInput(mInput);
-                    MessageCallback callback = mCallbacks.remove(getCallbackKey(msg));
-                    if (callback != null) {
-                        callback.onReceive(msg);
+                    if ((msg.getFlags() & Message.FLAG_INDICATION) == 0) {
+                        // responses
+                        MessageCallback callback = mCallbacks.remove(getCallbackKey(msg));
+                        if (callback != null) {
+                            callback.onReceive(msg);
+                        }
+                        debug("<< " + msg);
+                    } else {
+                        // indications
+                        for (MessageCallback cb : mIndicationHandlers) {
+                            cb.onReceive(msg);
+                        }
+                        // don't log indications, for now
                     }
-                    debug("<< " + msg);
                 }
 
                 debug("input thread stopping");
@@ -200,6 +212,7 @@ public class Client {
      * @throws QmiException
      */
     private short getClientId(ServiceCode service) throws QmiException {
+        // TODO racy
         if (mClientMap.get(service) == null) {
             Message allocMsg = new Message(ServiceCode.Control, 0x22);
             allocMsg.addTlvByte(0x01, service.value);
@@ -216,6 +229,10 @@ public class Client {
                 throw new QmiException("got unexpected service");
             }
             mClientMap.put(service, (short) (serviceTlvBytes[1] & 0xff));
+
+            if (service == ServiceCode.Uim) {
+                registerForUimIndications((byte) 7);
+            }
         }
 
         return mClientMap.get(service);
@@ -284,4 +301,16 @@ public class Client {
         return msg.getClientId() << 16 | msg.getTxId();
     }
 
+    private void registerForUimIndications(byte mask) throws QmiException {
+        Message msg = new Message(ServiceCode.Uim, 46);
+        msg.addTlvBytes(1, new byte[] { mask, 0, 0, 0 });
+        send(msg);
+    }
+
+    /**
+     * Register for indications (unsolicited messages). Currently all of them are sent to all handlers.
+     */
+    public void registerForIndications(MessageCallback callback) {
+        mIndicationHandlers.add(callback);
+    }
 }

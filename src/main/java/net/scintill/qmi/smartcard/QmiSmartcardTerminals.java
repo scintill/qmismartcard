@@ -34,7 +34,7 @@ public class QmiSmartcardTerminals extends CardTerminals {
         List<CardTerminal> l = new ArrayList<>(1);
         if (state == State.CARD_PRESENT || state == State.ALL) {
             // TODO handle multi-slot?
-            l.add(new QmiSmartcardTerminal(1));
+            l.add(new QmiSmartcardTerminal((byte) 1));
         }
         return l;
     }
@@ -46,10 +46,10 @@ public class QmiSmartcardTerminals extends CardTerminals {
 
     static class QmiSmartcardTerminal extends CardTerminal {
 
-        private int slot;
+        private byte slot;
         private Card card;
 
-        public QmiSmartcardTerminal(int slot) {
+        public QmiSmartcardTerminal(byte slot) {
             this.slot = slot;
         }
 

@@ -101,4 +101,8 @@ public class Tlv {
             totalLength += 1 + 2 + tlv.mValue.length;
         }
     }
+
+    public int getType() {
+        return mType;
+    }
 }

@@ -16,36 +16,31 @@
 
 package net.scintill.qmi.smartcard;
 
-import net.scintill.qmi.*;
+import net.scintill.qmi.Client;
+import net.scintill.qmi.QmiException;
+import net.scintill.qmi.SapClient;
 
 import javax.smartcardio.*;
-import java.nio.*;
-import java.util.Arrays;
+import java.nio.ByteBuffer;
 
 public class QmiSmartcardCard extends Card {
-    private int slot;
+    private byte slot;
     private Client client;
     private ATR atr;
+    private SapClient sapClient;
 
-    public QmiSmartcardCard(int slot, Client client) throws QmiException {
+    public QmiSmartcardCard(byte slot, Client client) throws QmiException {
         this.slot = slot;
         this.client = client;
 
-        // Get ATR
-        Message msg = new Message(ServiceCode.Uim, 0x41);
-        msg.addTlvByte(1, slot);
-        Message resp = client.send(msg);
-
-        Tlv tlv = resp.getTlv(0x10);
-        byte[] b = tlv.getValue();
-        if (b.length < 1) {
-            throw new RuntimeException("invalid ATR TLV");
-        }
-        if ((b[0] & 0xff) != b.length-1) {
-            throw new RuntimeException("invalid ATR TLV length");
+        this.sapClient = new SapClient(client, slot);
+        SapClient.ConnectionStatus currentStatus = sapClient.getConnectionStatus();
+        if (currentStatus != SapClient.ConnectionStatus.ConnectedSuccessfully && currentStatus != SapClient.ConnectionStatus.Connecting) {
+            sapClient.setConnected(true, 10000);
+            // TODO disconnect
         }
 
-        atr = new ATR(Arrays.copyOfRange(b, 1, b.length-2));
+        this.atr = sapClient.getAtr();
     }
 
     @Override
@@ -104,39 +99,12 @@ public class QmiSmartcardCard extends Card {
 
         @Override
         public ResponseAPDU transmit(CommandAPDU commandAPDU) throws CardException {
-            Message msg = new Message(ServiceCode.Uim, 0x3B);
-            msg.addTlvByte(0x01, slot);
-
-            // build TLV for PDU
-            ByteBuffer bb = ByteBuffer.allocate(2 + commandAPDU.getBytes().length);
-            bb.order(ByteOrder.LITTLE_ENDIAN);
-
-            bb.putShort((short) commandAPDU.getBytes().length);
-            bb.put(commandAPDU.getBytes());
-            msg.addTlvBytes(0x02, bb.array());
-
-            Message resp;
             try {
-                resp = client.send(msg);
+                return sapClient.sendAPDU(commandAPDU);
             } catch (QmiException e) {
                 throw new CardException("QMI error sending APDU", e);
             }
 
-            // parse response
-            Tlv tlv = resp.getTlv(0x10);
-            if (tlv == null) {
-                throw new CardException("APDU response TLV not returned");
-            }
-            byte[] b = tlv.getValue();
-            if (b.length < 2) {
-                throw new CardException("invalid APDU response TLV");
-            }
-            int length = b[0] | b[1] << 8;
-            if (length != b.length - 2) {
-                throw new CardException("invalid APDU response length");
-            }
-
-            return new ResponseAPDU(Arrays.copyOfRange(b, 2, b.length-3));
         }
 
         @Override

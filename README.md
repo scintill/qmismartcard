@@ -5,6 +5,7 @@ An experiment in building a Java-compatible smartcard interface on top of QMI ov
 # Caveats/TODO
 
 * SIM is assumed to be present
+* UIM indications pile up in duplicates from previous runs of the progarm - clean up somehow?
 * Other TODOs in code
 
 # Usage

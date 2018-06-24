@@ -78,6 +78,14 @@ public class Message {
     }
 
     /**
+     * Add a TLV.
+     * @param tlv
+     */
+    public void addTlv(Tlv tlv) {
+        mTlvs.put(tlv.getType(), tlv);
+    }
+
+    /**
      * Get the the given TLV by type code.
      * @param type the type code
      * @return
@@ -178,7 +186,7 @@ public class Message {
 
     @Override
     public String toString() {
-        return mService+"("+mService.value+") msg="+mMessage+" client="+mClient+" txid="+mTxId;
+        return mService+"("+mService.value+") msg="+mMessage+" client="+mClient+" txid="+mTxId+" flags="+mFlags;
     }
 
     /**
@@ -213,4 +221,9 @@ public class Message {
         return mClient;
     }
 
+    public int getFlags() { return mFlags; }
+
+    public int getMessageCode() { return mMessage; }
+
+    static final int FLAG_INDICATION = 4;
 }

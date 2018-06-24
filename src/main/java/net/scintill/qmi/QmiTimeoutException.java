@@ -16,25 +16,8 @@
 
 package net.scintill.qmi;
 
-import java.io.IOException;
-
-public class Main {
-
-    public static void main(String[] args) {
-        String path = "/dev/cdc-wdm1";
-
-        try {
-            Client client = new LinuxFileClient(path, System.err);
-            client.start();
-
-            Message msg = new Message(ServiceCode.Dms, 0x24);
-            Message resp = client.send(msg);
-            System.out.println("MSISDN="+resp.getTlv(1).getValueString());
-
-            client.stop();
-        } catch (IOException | QmiException e) {
-            throw new RuntimeException(e);
-        }
+public class QmiTimeoutException extends QmiException {
+    public QmiTimeoutException() {
+        super("Timeout");
     }
-
 }

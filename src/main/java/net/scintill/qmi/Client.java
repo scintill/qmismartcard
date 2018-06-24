@@ -12,10 +12,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with qmismartcard.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ */
 
 package net.scintill.qmi;
 
+import javax.annotation.Nullable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -23,31 +24,47 @@ import java.io.PrintStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * A QMI client. It is given stream to send the QMI on, and starts threads to read them
+ * when start() is called.
+ */
 
 public class Client {
     private InputStream mInput;
     private OutputStream mOutput;
     private PrintStream mDebug;
+
     private BlockingQueue<Message> mOutputQueue = new LinkedBlockingQueue<>();
-    private Map<String, Message.Callback> mCallbacks = new HashMap<>();
+    private final ConcurrentMap<Integer, MessageCallback> mCallbacks = new ConcurrentHashMap<>();
 
     private boolean mStopInputThread = false;
-    private static final Message STOP_MESSAGE = new Message();
+    private static final Message THE_STOP_MESSAGE = new Message();
 
-    public Client(InputStream in, OutputStream out, PrintStream debug) {
+    /**
+     * @param in QMI input stream
+     * @param out QMI output stream
+     * @param debug an optional stream to output debug messages
+     */
+    public Client(InputStream in, OutputStream out, @Nullable PrintStream debug) throws IOException {
         mInput = in;
         mOutput = out;
         mDebug = debug;
     }
 
+    /**
+     * Start the processing on input/output QMI messages.
+     */
     public void start() {
         new Thread(() -> {
             try {
                 while (!mStopInputThread || mCallbacks.size() != 0) {
                     Message msg = Message.readFromInput(mInput);
-                    Message.Callback callback = mCallbacks.remove(msg.getCallbackKey());
+                    MessageCallback callback = mCallbacks.remove(getCallbackKey(msg));
                     if (callback != null) {
                         callback.onReceive(msg);
                     }
@@ -65,7 +82,7 @@ public class Client {
                 for (;;) { // forever
                     // send output messages
                     Message msg = mOutputQueue.take();
-                    if (msg == STOP_MESSAGE) break;
+                    if (msg == THE_STOP_MESSAGE) break;
 
                     msg.writeToOutput(mOutput);
                     debug(">> " + msg);
@@ -78,30 +95,63 @@ public class Client {
         }, "MessagePumpOutput").start();
     }
 
+    /**
+     * Stop the processing of QMI input/output messages.
+     */
     public void stop() {
         mStopInputThread = true;
         deallocateClients();
-        mOutputQueue.add(STOP_MESSAGE);
+        mOutputQueue.add(THE_STOP_MESSAGE);
     }
 
-    public void send(Message msg, Message.Callback callback) throws Message.QmiException {
-        if (msg.getService() != Message.Service.Control) {
-            msg.setClientId(this.getClientId(msg.getService()));
+    /**
+     * Initialize this message for sending -- give it a client ID and transaction ID.
+     * An exception may be thrown if a client ID needs to be allocated, and something goes wrong in that process.
+     * @param msg
+     * @throws QmiException
+     */
+    private void prepareMessageForSending(Message msg) throws QmiException {
+        if (msg.getServiceCode() != ServiceCode.Control) {
+            msg.setClientId(this.getClientId(msg.getServiceCode()));
         }
 
+        msg.setTxId(getTxId());
+    }
+
+    /**
+     * Asynchronously send a message.
+     * @param msg
+     * @param callback
+     * @throws QmiException
+     */
+    public void sendAsync(Message msg, MessageCallback callback) throws QmiException {
+        prepareMessageForSending(msg);
+
         if (callback != null) {
-            mCallbacks.put(msg.getCallbackKey(), callback);
+            mCallbacks.put(getCallbackKey(msg), callback);
         }
         mOutputQueue.add(msg);
     }
 
-    public void send(Message msg) throws Message.QmiException {
-        send(msg, null);
+    /**
+     * Asynchronously send a message, without giving a callback for any response that may come.
+     * @param msg
+     * @throws QmiException
+     */
+    public void sendAsync(Message msg) throws QmiException {
+        sendAsync(msg, null);
     }
 
-    public Message sendAndWait(Message msg, int timeout) throws Message.QmiException {
+    /**
+     * Synchronously send a message. Wait for the response, or until the timeout (in ms).
+     * @param msg
+     * @param timeout timeout in ms
+     * @return the response message
+     * @throws QmiTimeoutException in case of timeout
+     */
+    public Message send(Message msg, int timeout) throws QmiException {
         final AtomicReference<Message> responseMsgHolder = new AtomicReference<>();
-        send(msg, responseMsg -> {
+        sendAsync(msg, responseMsg -> {
             synchronized (responseMsgHolder) {
                 responseMsgHolder.set(responseMsg);
                 responseMsgHolder.notify();
@@ -112,7 +162,7 @@ public class Client {
                 try {
                     responseMsgHolder.wait(timeout);
                 } catch (InterruptedException e) {
-                    throw new Message.QmiException("interrupted");
+                    throw new QmiException("interrupted");
                 }
             }
         }
@@ -120,37 +170,50 @@ public class Client {
         Message responseMsg = responseMsgHolder.get();
 
         if (responseMsg == null) {
-            throw new Message.QmiTimeoutException();
+            // cancel callback, so input thread doesn't hang when we're ready to stop
+            mCallbacks.remove(getCallbackKey(msg));
+            throw new QmiTimeoutException();
         }
 
-        responseMsg.raiseQmiException(responseMsg.getTlv(0x02));
+        throwQmiExceptionForMessageResult(responseMsg);
         return responseMsg;
     }
 
-    public Message sendAndWait(Message msg) throws Message.QmiException {
-        return sendAndWait(msg, 0);
+    /**
+     * Synchronously send a message. Wait for the response.
+     * @param msg
+     * @return the response message
+     */
+    public Message send(Message msg) throws QmiException {
+        return send(msg, 0);
     }
 
     private void debug(String msg) {
         if (mDebug != null) mDebug.println(msg);
     }
 
-    private Map<Message.Service, Short> mClientMap = new HashMap<>();
-    private short getClientId(Message.Service service) throws Message.QmiException {
+    private Map<ServiceCode, Short> mClientMap = new HashMap<>();
+    /**
+     * Get a client ID for the given service, asking the control service for a new one if necessary.
+     * @param service
+     * @return the client ID
+     * @throws QmiException
+     */
+    private short getClientId(ServiceCode service) throws QmiException {
         if (mClientMap.get(service) == null) {
-            Message allocMsg = new Message(Message.Service.Control, 0x22);
+            Message allocMsg = new Message(ServiceCode.Control, 0x22);
             allocMsg.addTlvByte(0x01, service.value);
-            Message allocResponse = sendAndWait(allocMsg);
+            Message allocResponse = send(allocMsg);
             Tlv serviceTlv = allocResponse.getTlv(1);
             if (serviceTlv == null) {
-                throw new Message.QmiException("unable to find service allocation tlv");
+                throw new QmiException("unable to find service allocation tlv");
             }
             byte[] serviceTlvBytes = serviceTlv.getValue();
             if (serviceTlvBytes.length != 2) {
-                throw new Message.QmiException("unexpected servicetlv length");
+                throw new QmiException("unexpected servicetlv length");
             }
             if (((int) serviceTlvBytes[0] & 0xff) != service.value) {
-                throw new Message.QmiException("got unexpected service");
+                throw new QmiException("got unexpected service");
             }
             mClientMap.put(service, (short) (serviceTlvBytes[1] & 0xff));
         }
@@ -158,17 +221,67 @@ public class Client {
         return mClientMap.get(service);
     }
 
-    private void deallocateClients() {
-        for (Map.Entry<Message.Service, Short> clientPair : mClientMap.entrySet()) {
-            Message deallocMsg = new Message(Message.Service.Control, 0x23);
+    /**
+     * Unregister allocated client IDs with the QMI endpoint.
+     * @return true if any QMI errors occurred while de-allocating
+     */
+    private boolean deallocateClients() {
+        boolean qmiError = false;
+
+        for (Map.Entry<ServiceCode, Short> clientPair : mClientMap.entrySet()) {
+            Message deallocMsg = new Message(ServiceCode.Control, 0x23);
             deallocMsg.addTlvBytes(0x01, new byte[] { (byte) clientPair.getKey().value, clientPair.getValue().byteValue() });
             try {
-                sendAndWait(deallocMsg, 2500);
-            } catch (Message.QmiException e) {
+                send(deallocMsg, 2500);
+            } catch (QmiException e) {
                 debug("error deallocating client "+clientPair.getKey()+": "+e);
+                qmiError = true;
                 // continue
             }
         }
         mClientMap.clear();
+
+        return qmiError;
     }
+
+    private static short txId = 1;
+    /**
+     * Get a transaction ID for a message.
+     * @return the ID
+     */
+    private synchronized short getTxId() {
+        return txId++;
+    }
+
+    /**
+     * Raise a QMI exception, if the given message contains QMI error information.
+     * @param msg
+     * @throws QmiException
+     */
+    private void throwQmiExceptionForMessageResult(Message msg) throws QmiException {
+        Tlv tlv02 = msg.getTlv(0x02);
+
+        if (tlv02 == null) {
+            throw new QmiException("no result TLV");
+        }
+        byte[] bytes = tlv02.getValue();
+        if (bytes.length != 4) {
+            throw new QmiException("invalid TLV 0x02 length");
+        }
+        if (bytes[0] != 0 || bytes[1] != 0) {
+            throw new QmiErrorCodeException(QmiErrorCode.fromValue(
+                    ((int) bytes[2]) | bytes[3] << 8)
+            );
+        }
+    }
+
+    /**
+     * Get an int to use as key for the callback associated with the message.
+     * @param msg message
+     * @return the string key
+     */
+    private int getCallbackKey(Message msg) {
+        return msg.getClientId() << 16 | msg.getTxId();
+    }
+
 }

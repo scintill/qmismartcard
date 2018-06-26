@@ -17,16 +17,25 @@
 package net.scintill.qmi.smartcard;
 
 import net.scintill.qmi.Client;
+import net.scintill.qmi.LinuxFileClient;
 
+import java.io.IOException;
 import java.security.Provider;
 
 public class QmiSmartcardProvider extends Provider {
 
     /* package */ static Client sQmiClient;
 
-    public QmiSmartcardProvider(Client qmiClient) {
+    public QmiSmartcardProvider() {
+        // TODO include version stuff from phone
         super("QmiSmartcardProvider", 1.0, "QmiSmartcardProvider");
-        sQmiClient = qmiClient;
+        try {
+            // TODO make configurable
+            sQmiClient = new LinuxFileClient("/dev/cdc-wdm0", null/*System.err*/);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        sQmiClient.start();
         put("TerminalFactory.QmiTerminalFactory", TerminalFactorySpi.class.getName());
     }
 }

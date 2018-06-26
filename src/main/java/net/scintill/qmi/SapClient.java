@@ -22,6 +22,7 @@ import javax.smartcardio.ResponseAPDU;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -31,7 +32,7 @@ public class SapClient implements MessageCallback {
 
     private final Client qmiClient;
     private final byte slot;
-    private final AtomicReference<ConnectionStatus> connectionStatusHolder = new AtomicReference<>();
+    private final AtomicReference<ConnectionStatus> connectionStatusHolder = new AtomicReference<>(ConnectionStatus.NotEnabled);
 
     // message codes
     private static final int SAP_CONNECT = 60;
@@ -55,34 +56,66 @@ public class SapClient implements MessageCallback {
     }
 
     /**
+     * Connect to the SIM via SAP. Block until connected, or timeout occurs.
+     * @param timeout in ms, or 0 for infinite
+     * @throws QmiException
+     * @return false if timeout or error
+     */
+    public boolean connect(int timeout) throws QmiException {
+        return connect(true, timeout);
+    }
+
+    /**
+     * Disonnect from the SIM via SAP. Block until disconnected, or timeout occurs.
+     * @param timeout in ms, or 0 for infinite
+     * @throws QmiException
+     * @return false if timeout or error
+     */
+    public boolean disconnect(int timeout) throws QmiException {
+        return connect(false, timeout);
+    }
+
+    /**
      * Connect/disconnect to the SIM via SAP. If connecting, block until connected, or timeout occurs.
      * @param isConnecting true to connect
      * @param timeout in ms, or 0 for infinite
      * @throws QmiException
-     * @return false if timeout
+     * @return false if timeout or error
      */
-    public boolean setConnected(boolean isConnecting, int timeout) throws QmiException {
-        synchronized (connectionStatusHolder) {
-            connectionStatusHolder.set(ConnectionStatus.NotEnabled);
-        }
-        sendSapMessage(SAP_CONNECT, isConnecting ? 1 : 0);
+    private boolean connect(boolean isConnecting, int timeout) throws QmiException {
+        sendSapMessage(SAP_CONNECT, isConnecting ? 1 : 0,
+                //new Tlv((short) 0x12, new byte[] { 3 }) // connection condition = allow
+                null
+        );
+
+        List<ConnectionStatus> finishedStatuses = Arrays.asList(isConnecting ?
+            new ConnectionStatus[] { ConnectionStatus.ConnectedSuccessfully, ConnectionStatus.ConnectionError } :
+            new ConnectionStatus[] { ConnectionStatus.DisconnectedSuccessfully, ConnectionStatus.NotEnabled });
 
         // TODO is this stupid, or just expectedly boilerplatey?
-        if (isConnecting) {
-            if (connectionStatusHolder.get() != ConnectionStatus.ConnectedSuccessfully) {
-                synchronized (connectionStatusHolder) {
-                    try {
-                        connectionStatusHolder.wait(timeout);
-                    } catch (InterruptedException e) { /* fall through */ }
+        if (!finishedStatuses.contains(connectionStatusHolder.get())) {
+            synchronized (connectionStatusHolder) {
+                try {
+                    connectionStatusHolder.wait(timeout);
+                } catch (InterruptedException e) { /* fall through */ }
 
-                    if (connectionStatusHolder.get() != ConnectionStatus.ConnectedSuccessfully) {
-                        return false;
-                    }
+                if (!finishedStatuses.contains(connectionStatusHolder.get())) {
+                    return false;
                 }
             }
         }
 
         return true;
+    }
+
+    /**
+     * Reset the SIM card.
+     * @throws QmiException
+     */
+    public void resetSim() throws QmiException {
+        sendSapMessage(SAP_REQUEST, 4);
+        //sendSapMessage(SAP_REQUEST, 2); // power off
+        //sendSapMessage(SAP_REQUEST, 3); // power on
     }
 
     public ConnectionStatus getConnectionStatus() throws QmiException {
@@ -104,18 +137,29 @@ public class SapClient implements MessageCallback {
      * @return the response PDU
      * @throws QmiException
      */
-    public ResponseAPDU sendAPDU(CommandAPDU commandApdu) throws QmiException {
+    public ResponseAPDU sendApdu(CommandAPDU commandApdu) throws QmiException {
         // build TLV for APDU
         ByteBuffer bb = ByteBuffer.allocate(2 + commandApdu.getBytes().length);
         bb.order(ByteOrder.LITTLE_ENDIAN);
 
+        // TODO does this correctly handle large 2-byte lengths ?
         bb.putShort((short) commandApdu.getBytes().length);
         bb.put(commandApdu.getBytes());
 
         Tlv apduTlv = new Tlv((short) 0x10, bb.array());
 
         // send APDU
-        Message resp = sendSapMessage(SAP_REQUEST, 1, apduTlv);
+        Message resp;
+        try {
+            resp = sendSapMessage(SAP_REQUEST, 1, apduTlv);
+        } catch (QmiErrorCodeException e) {
+            // TODO can we do better? AFAICT, the card is not denying this, the QMI service is
+            if (e.getQmiErrorCode() == QmiErrorCode.AccessDenied) {
+                return new ResponseAPDU(new byte[]{ (byte) 0x98, (byte) 0x04 }); // Access Condition not fulfilled
+            } else {
+                throw e;
+            }
+        }
 
         // parse response
         Tlv tlv = resp.getTlv(0x11);

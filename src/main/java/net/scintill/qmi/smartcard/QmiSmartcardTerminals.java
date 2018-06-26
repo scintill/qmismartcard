@@ -60,9 +60,10 @@ public class QmiSmartcardTerminals extends CardTerminals {
 
         @Override
         public Card connect(String protocol) throws CardException {
+            // TODO implement protocol? is it possible?
             if (card == null) {
                 try {
-                    card = new QmiSmartcardCard(slot, QmiSmartcardProvider.sQmiClient);
+                    card = new QmiSmartcardCard(slot, QmiSmartcardProvider.sQmiClient, this);
                 } catch (QmiException e) {
                     throw new CardException("QMI card exception", e);
                 }
@@ -84,6 +85,10 @@ public class QmiSmartcardTerminals extends CardTerminals {
         @Override
         public boolean waitForCardAbsent(long l) throws CardException {
             throw new RuntimeException("not implemented");
+        }
+
+        /* package */ void cardDisconnectNotify() {
+            this.card = null;
         }
     }
 

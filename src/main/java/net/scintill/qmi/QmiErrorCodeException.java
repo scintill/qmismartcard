@@ -17,7 +17,15 @@
 package net.scintill.qmi;
 
 public class QmiErrorCodeException extends QmiException {
+    private QmiErrorCode qmiErrorCode;
+
     public QmiErrorCodeException(QmiErrorCode ec) {
         super("ErrorCode "+ec);
+        this.qmiErrorCode = ec;
     }
+
+    public QmiErrorCode getQmiErrorCode() {
+        return qmiErrorCode;
+    }
+
 }
